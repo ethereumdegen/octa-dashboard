@@ -12,6 +12,10 @@ An open-source admin dashboard with a pluggable microservice architecture. Ships
                 [PostgreSQL 16]
 ```
 
+
+<img width="1352" height="914" alt="image" src="https://github.com/user-attachments/assets/b750c4e9-6890-41cb-b416-5861d4ae2255" />
+
+
 ## Features
 
 - Team management with GitHub OAuth login
