@@ -1,0 +1,16 @@
+{
+  "name": "octa-dashboard",
+  "private": true,
+  "scripts": {
+    "dev": "npm run build -w microservices/knowledgebase-agent/frontend && concurrently -n server,kb,ui -c blue,magenta,green \"cargo run -p dashboard-server\" \"KB_STATIC_DIR=microservices/knowledgebase-agent/frontend/dist cargo run -p knowledgebase-agent\" \"npm run dev -w frontend/dashboard\"",
+    "build:frontend": "npm run build -w frontend/dashboard && npm run build -w microservices/knowledgebase-agent/frontend",
+    "build:backend": "cargo build --workspace --release"
+  },
+  "workspaces": [
+    "frontend/dashboard",
+    "microservices/knowledgebase-agent/frontend"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

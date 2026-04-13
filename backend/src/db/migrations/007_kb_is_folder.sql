@@ -1,0 +1,1 @@
+ALTER TABLE kb_documents ADD COLUMN is_folder BOOLEAN NOT NULL DEFAULT false;

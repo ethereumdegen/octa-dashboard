@@ -1,0 +1,7 @@
+target/
+node_modules/
+dist/
+.env
+*.log
+.pgdata/
+PLAN-css-isolation-and-shared-deps.md

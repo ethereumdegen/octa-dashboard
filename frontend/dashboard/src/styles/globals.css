@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-surface text-gray-900 font-sans antialiased;
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Safe area padding for mobile bottom nav (iOS notch devices) */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
