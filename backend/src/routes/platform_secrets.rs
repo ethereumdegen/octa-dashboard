@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::auth::session::Claims;
@@ -28,17 +29,11 @@ pub async fn list_secrets(
     State(state): State<AppState>,
     _claims: Claims,
 ) -> impl IntoResponse {
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    let rows = match client
-        .query(
-            "SELECT key, description, updated_at FROM platform_secrets ORDER BY key",
-            &[],
-        )
-        .await
+    let rows = match sqlx::query(
+        "SELECT key, description, updated_at FROM platform_secrets ORDER BY key",
+    )
+    .fetch_all(&state.pool)
+    .await
     {
         Ok(r) => r,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -48,10 +43,10 @@ pub async fn list_secrets(
         .iter()
         .map(|r| {
             serde_json::json!({
-                "key": r.get::<_, String>("key"),
-                "description": r.get::<_, String>("description"),
+                "key": r.get::<String, _>("key"),
+                "description": r.get::<String, _>("description"),
                 "is_set": true,
-                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>("updated_at").to_rfc3339(),
+                "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at").to_rfc3339(),
             })
         })
         .collect();
@@ -74,19 +69,18 @@ pub async fn create_secret(
     }
 
     let user_id: Option<Uuid> = claims.user_id();
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
 
-    match client
-        .execute(
-            "INSERT INTO platform_secrets (key, value, description, updated_by, updated_at)
-             VALUES ($1, $2, $3, $4, now())
-             ON CONFLICT (key) DO UPDATE SET value = $2, description = $3, updated_by = $4, updated_at = now()",
-            &[&key, &body.value.trim(), &body.description.trim(), &user_id],
-        )
-        .await
+    match sqlx::query(
+        "INSERT INTO platform_secrets (key, value, description, updated_by, updated_at)
+         VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT (key) DO UPDATE SET value = $2, description = $3, updated_by = $4, updated_at = now()",
+    )
+    .bind(key.as_str())
+    .bind(body.value.trim())
+    .bind(body.description.trim())
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
     {
         Ok(_) => Json(serde_json::json!({"saved": true, "key": key})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -105,39 +99,43 @@ pub async fn set_secret(
     }
 
     let user_id: Option<Uuid> = claims.user_id();
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
 
     // Update value, and optionally update description if provided
     let result = if let Some(desc) = &body.description {
-        client
-            .execute(
-                "UPDATE platform_secrets SET value = $1, description = $2, updated_by = $3, updated_at = now() WHERE key = $4",
-                &[&body.value.trim(), &desc.trim(), &user_id, &key],
-            )
-            .await
+        sqlx::query(
+            "UPDATE platform_secrets SET value = $1, description = $2, updated_by = $3, updated_at = now() WHERE key = $4",
+        )
+        .bind(body.value.trim())
+        .bind(desc.trim())
+        .bind(user_id)
+        .bind(key.as_str())
+        .execute(&state.pool)
+        .await
     } else {
-        client
-            .execute(
-                "UPDATE platform_secrets SET value = $1, updated_by = $2, updated_at = now() WHERE key = $3",
-                &[&body.value.trim(), &user_id, &key],
-            )
-            .await
+        sqlx::query(
+            "UPDATE platform_secrets SET value = $1, updated_by = $2, updated_at = now() WHERE key = $3",
+        )
+        .bind(body.value.trim())
+        .bind(user_id)
+        .bind(key.as_str())
+        .execute(&state.pool)
+        .await
     };
 
     match result {
-        Ok(0) => {
+        Ok(r) if r.rows_affected() == 0 => {
             // Key doesn't exist yet — create it (upsert)
-            match client
-                .execute(
-                    "INSERT INTO platform_secrets (key, value, description, updated_by, updated_at)
-                     VALUES ($1, $2, $3, $4, now())
-                     ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $4, updated_at = now()",
-                    &[&key, &body.value.trim(), &body.description.as_deref().unwrap_or(""), &user_id],
-                )
-                .await
+            match sqlx::query(
+                "INSERT INTO platform_secrets (key, value, description, updated_by, updated_at)
+                 VALUES ($1, $2, $3, $4, now())
+                 ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $4, updated_at = now()",
+            )
+            .bind(key.as_str())
+            .bind(body.value.trim())
+            .bind(body.description.as_deref().unwrap_or(""))
+            .bind(user_id)
+            .execute(&state.pool)
+            .await
             {
                 Ok(_) => Json(serde_json::json!({"saved": true})).into_response(),
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -154,16 +152,12 @@ pub async fn delete_secret(
     _claims: Claims,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    match client
-        .execute("DELETE FROM platform_secrets WHERE key = $1", &[&key])
+    match sqlx::query("DELETE FROM platform_secrets WHERE key = $1")
+        .bind(key.as_str())
+        .execute(&state.pool)
         .await
     {
-        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => Json(serde_json::json!({"deleted": true})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -176,16 +170,9 @@ pub async fn get_secret_value(
     _claims: Claims,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    match client
-        .query_opt(
-            "SELECT value FROM platform_secrets WHERE key = $1",
-            &[&key],
-        )
+    match sqlx::query("SELECT value FROM platform_secrets WHERE key = $1")
+        .bind(key.as_str())
+        .fetch_optional(&state.pool)
         .await
     {
         Ok(Some(row)) => {
@@ -213,23 +200,16 @@ pub async fn get_secret_value_internal(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
     // Constant-time comparison to prevent timing attacks
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let hash_provided = Sha256::digest(provided.as_bytes());
     let hash_expected = Sha256::digest(agent_secret.as_bytes());
     if hash_provided != hash_expected {
         return (StatusCode::UNAUTHORIZED, "Invalid agent secret").into_response();
     }
 
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    match client
-        .query_opt(
-            "SELECT value FROM platform_secrets WHERE key = $1",
-            &[&key],
-        )
+    match sqlx::query("SELECT value FROM platform_secrets WHERE key = $1")
+        .bind(key.as_str())
+        .fetch_optional(&state.pool)
         .await
     {
         Ok(Some(row)) => {

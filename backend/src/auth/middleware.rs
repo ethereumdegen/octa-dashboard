@@ -6,6 +6,7 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 
 use crate::auth::session::{verify_token, Claims};
 
@@ -15,7 +16,7 @@ pub struct SkipLogin;
 
 /// Database pool passed via Extension for API key lookups
 #[derive(Clone)]
-pub struct AuthPool(pub deadpool_postgres::Pool);
+pub struct AuthPool(pub sqlx::PgPool);
 
 fn dev_claims() -> Claims {
     Claims {
@@ -46,29 +47,26 @@ fn extract_api_token(req: &Request) -> Option<String> {
 }
 
 /// Look up an API key and return Claims for the owning user
-async fn resolve_api_key(pool: &deadpool_postgres::Pool, token: &str) -> Option<Claims> {
+async fn resolve_api_key(pool: &sqlx::PgPool, token: &str) -> Option<Claims> {
     let key_hash = hash_api_key(token);
-    let client = pool.get().await.ok()?;
 
-    let row = client
-        .query_opt(
-            "SELECT ak.id, ak.project_id
-             FROM api_keys ak
-             WHERE ak.key_hash = $1 AND ak.revoked_at IS NULL",
-            &[&key_hash],
-        )
-        .await
-        .ok()??;
+    let row = sqlx::query(
+        "SELECT ak.id, ak.project_id
+         FROM api_keys ak
+         WHERE ak.key_hash = $1 AND ak.revoked_at IS NULL",
+    )
+    .bind(key_hash.as_str())
+    .fetch_optional(pool)
+    .await
+    .ok()??;
 
     let key_id: uuid::Uuid = row.get("id");
     let project_id: uuid::Uuid = row.get("project_id");
 
     // Update last_used_at (fire and forget)
-    let _ = client
-        .execute(
-            "UPDATE api_keys SET last_used_at = now() WHERE id = $1",
-            &[&key_id],
-        )
+    let _ = sqlx::query("UPDATE api_keys SET last_used_at = now() WHERE id = $1")
+        .bind(key_id)
+        .execute(pool)
         .await;
 
     // API key auth gets admin-level access scoped to its project

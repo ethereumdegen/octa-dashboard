@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::auth::session::Claims;
@@ -19,27 +20,21 @@ pub async fn list_sources(
     State(state): State<AppState>,
     _claims: Claims,
 ) -> impl IntoResponse {
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    match client
-        .query(
-            "SELECT id, url, label, created_at FROM agent_sources ORDER BY created_at",
-            &[],
-        )
-        .await
+    match sqlx::query(
+        "SELECT id, url, label, created_at FROM agent_sources ORDER BY created_at",
+    )
+    .fetch_all(&state.pool)
+    .await
     {
         Ok(rows) => {
             let sources: Vec<serde_json::Value> = rows
                 .iter()
                 .map(|r| {
                     serde_json::json!({
-                        "id": r.get::<_, Uuid>("id"),
-                        "url": r.get::<_, String>("url"),
-                        "label": r.get::<_, String>("label"),
-                        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>("created_at").to_rfc3339(),
+                        "id": r.get::<Uuid, _>("id"),
+                        "url": r.get::<String, _>("url"),
+                        "label": r.get::<String, _>("label"),
+                        "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
                     })
                 })
                 .collect();
@@ -60,26 +55,23 @@ pub async fn add_source(
     }
 
     let label = body.label.unwrap_or_default();
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
 
-    match client
-        .query_one(
-            "INSERT INTO agent_sources (url, label) VALUES ($1, $2)
-             ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
-             RETURNING id, url, label, created_at",
-            &[&url, &label],
-        )
-        .await
+    match sqlx::query(
+        "INSERT INTO agent_sources (url, label) VALUES ($1, $2)
+         ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
+         RETURNING id, url, label, created_at",
+    )
+    .bind(url.as_str())
+    .bind(label.as_str())
+    .fetch_one(&state.pool)
+    .await
     {
         Ok(row) => {
             let source = serde_json::json!({
-                "id": row.get::<_, Uuid>("id"),
-                "url": row.get::<_, String>("url"),
-                "label": row.get::<_, String>("label"),
-                "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>("created_at").to_rfc3339(),
+                "id": row.get::<Uuid, _>("id"),
+                "url": row.get::<String, _>("url"),
+                "label": row.get::<String, _>("label"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
             });
 
             // Trigger discovery for the newly added URL
@@ -100,33 +92,24 @@ pub async fn remove_source(
     _claims: Claims,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let client = match state.pool.get().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    match client
-        .execute("DELETE FROM agent_sources WHERE id = $1", &[&id])
+    match sqlx::query("DELETE FROM agent_sources WHERE id = $1")
+        .bind(id)
+        .execute(&state.pool)
         .await
     {
-        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => Json(serde_json::json!({"deleted": true})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
 /// Read agent source URLs from the database.
-pub async fn get_source_urls(pool: &deadpool_postgres::Pool) -> Vec<String> {
-    let client = match pool.get().await {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
-
-    match client
-        .query("SELECT url FROM agent_sources ORDER BY created_at", &[])
+pub async fn get_source_urls(pool: &sqlx::PgPool) -> Vec<String> {
+    match sqlx::query("SELECT url FROM agent_sources ORDER BY created_at")
+        .fetch_all(pool)
         .await
     {
-        Ok(rows) => rows.iter().map(|r| r.get::<_, String>("url")).collect(),
+        Ok(rows) => rows.iter().map(|r| r.get::<String, _>("url")).collect(),
         Err(_) => vec![],
     }
 }

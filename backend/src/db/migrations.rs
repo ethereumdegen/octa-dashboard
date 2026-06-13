@@ -1,4 +1,4 @@
-use deadpool_postgres::Pool;
+use sqlx::PgPool;
 use tracing::info;
 
 const MIGRATIONS: &[(&str, &str)] = &[
@@ -17,31 +17,35 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("014_agent_sources", include_str!("migrations/014_agent_sources.sql")),
     ("015_microservices_data_driven", include_str!("migrations/015_microservices_data_driven.sql")),
     ("016_platform_secrets_description", include_str!("migrations/016_platform_secrets_description.sql")),
+    ("017_kb_rag", include_str!("migrations/017_kb_rag.sql")),
+    ("018_kb_description", include_str!("migrations/018_kb_description.sql")),
+    ("019_drop_legacy_kb_documents", include_str!("migrations/019_drop_legacy_kb_documents.sql")),
 ];
 
-pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error>> {
-    let client = pool.get().await?;
+pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-    client
-        .execute(
-            "CREATE TABLE IF NOT EXISTS _migrations (
-                name TEXT PRIMARY KEY,
-                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )",
-            &[],
-        )
-        .await?;
-
-    for (name, sql) in MIGRATIONS {
-        let applied = client
-            .query_opt("SELECT 1 FROM _migrations WHERE name = $1", &[name])
+    for &(name, sql) in MIGRATIONS {
+        let applied = sqlx::query("SELECT 1 FROM _migrations WHERE name = $1")
+            .bind(name)
+            .fetch_optional(pool)
             .await?;
 
         if applied.is_none() {
             info!("Applying migration: {name}");
-            client.batch_execute(sql).await?;
-            client
-                .execute("INSERT INTO _migrations (name) VALUES ($1)", &[name])
+            // raw_sql runs multiple statements in one batch (simple query protocol),
+            // which migrations with CREATE TYPE / multiple DDL statements require.
+            sqlx::raw_sql(sql).execute(pool).await?;
+            sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
+                .bind(name)
+                .execute(pool)
                 .await?;
         }
     }

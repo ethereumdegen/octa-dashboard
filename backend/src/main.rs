@@ -19,7 +19,7 @@ use db::pool::create_pool;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub pool: deadpool_postgres::Pool,
+    pub pool: sqlx::PgPool,
     pub config: Config,
 }
 
@@ -38,18 +38,14 @@ async fn main() {
 
     // Seed initial admin
     if !config.initial_admin_email.is_empty() {
-        let client = pool.get().await.expect("DB connection for seeding");
-        let count: i64 = client
-            .query_one("SELECT COUNT(*) as count FROM team_members", &[])
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_members")
+            .fetch_one(&pool)
             .await
-            .expect("Count team_members")
-            .get("count");
+            .expect("Count team_members");
         if count == 0 {
-            client
-                .execute(
-                    "INSERT INTO team_members (email, role) VALUES ($1, 'admin')",
-                    &[&config.initial_admin_email],
-                )
+            sqlx::query("INSERT INTO team_members (email, role) VALUES ($1, 'admin')")
+                .bind(config.initial_admin_email.as_str())
+                .execute(&pool)
                 .await
                 .expect("Seed initial admin");
             info!("Seeded initial admin: {}", config.initial_admin_email);
@@ -58,14 +54,13 @@ async fn main() {
 
     // Seed agent sources from AGENT_URLS env var (won't overwrite existing)
     if !config.agent_urls.is_empty() {
-        let client = pool.get().await.expect("DB connection for agent source seeding");
         for url in &config.agent_urls {
-            let _ = client
-                .execute(
-                    "INSERT INTO agent_sources (url) VALUES ($1) ON CONFLICT (url) DO NOTHING",
-                    &[url],
-                )
-                .await;
+            let _ = sqlx::query(
+                "INSERT INTO agent_sources (url) VALUES ($1) ON CONFLICT (url) DO NOTHING",
+            )
+            .bind(url.as_str())
+            .execute(&pool)
+            .await;
         }
         info!("Seeded {} agent source(s) from AGENT_URLS", config.agent_urls.len());
     }

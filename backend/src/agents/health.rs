@@ -1,8 +1,8 @@
-use deadpool_postgres::Pool;
+use sqlx::{PgPool, Row};
 use std::time::Duration;
 use tracing::{info, warn};
 
-pub fn start_health_checker(pool: Pool) {
+pub fn start_health_checker(pool: PgPool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
@@ -15,15 +15,10 @@ pub fn start_health_checker(pool: Pool) {
     });
 }
 
-async fn check_all_agents(pool: &Pool) {
+async fn check_all_agents(pool: &PgPool) {
     let secret = std::env::var("AGENT_SECRET").unwrap_or_default();
 
-    let client = match pool.get().await {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let rows = match client.query("SELECT id, url FROM agents", &[]).await {
+    let rows = match sqlx::query("SELECT id, url FROM agents").fetch_all(pool).await {
         Ok(r) => r,
         Err(_) => return,
     };
@@ -45,11 +40,10 @@ async fn check_all_agents(pool: &Pool) {
             _ => "unhealthy",
         };
 
-        let _ = client
-            .execute(
-                "UPDATE agents SET status = $1, last_health_check = now() WHERE id = $2",
-                &[&status, &id],
-            )
+        let _ = sqlx::query("UPDATE agents SET status = $1, last_health_check = now() WHERE id = $2")
+            .bind(status)
+            .bind(id.as_str())
+            .execute(pool)
             .await;
 
         if status == "unhealthy" {

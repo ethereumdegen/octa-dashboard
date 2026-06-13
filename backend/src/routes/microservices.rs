@@ -3,6 +3,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use sqlx::Row;
 
 use crate::db::models::Microservice;
 use crate::error::AppError;
@@ -11,14 +12,12 @@ use crate::AppState;
 pub async fn list_microservices(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Microservice>>, AppError> {
-    let client = state.pool.get().await?;
-    let rows = client
-        .query(
-            "SELECT id, name, description, icon, slug, nav_path, enabled, source_url, installed_at
-             FROM microservices ORDER BY name",
-            &[],
-        )
-        .await?;
+    let rows = sqlx::query(
+        "SELECT id, name, description, icon, slug, nav_path, enabled, source_url, installed_at
+         FROM microservices ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await?;
 
     let services: Vec<Microservice> = rows
         .iter()
@@ -48,15 +47,15 @@ pub async fn toggle_microservice(
     Path(id): Path<String>,
     Json(body): Json<ToggleBody>,
 ) -> Result<Json<Microservice>, AppError> {
-    let client = state.pool.get().await?;
-    let row = client
-        .query_opt(
-            "UPDATE microservices SET enabled = $1 WHERE id = $2
-             RETURNING id, name, description, icon, slug, nav_path, enabled, source_url, installed_at",
-            &[&body.enabled, &id],
-        )
-        .await?
-        .ok_or_else(|| AppError::NotFound("Microservice not found".into()))?;
+    let row = sqlx::query(
+        "UPDATE microservices SET enabled = $1 WHERE id = $2
+         RETURNING id, name, description, icon, slug, nav_path, enabled, source_url, installed_at",
+    )
+    .bind(body.enabled)
+    .bind(id.as_str())
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Microservice not found".into()))?;
 
     Ok(Json(Microservice {
         id: row.get("id"),
@@ -77,34 +76,31 @@ pub async fn toggle_microservice(
 pub async fn list_services(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let client = state.pool.get().await?;
-
     // Fetch configured secret keys in one query
-    let secret_rows = client
-        .query("SELECT key FROM platform_secrets", &[])
+    let secret_rows = sqlx::query("SELECT key FROM platform_secrets")
+        .fetch_all(&state.pool)
         .await?;
     let configured_keys: std::collections::HashSet<String> = secret_rows
         .iter()
-        .map(|r| r.get::<_, String>("key"))
+        .map(|r| r.get::<String, _>("key"))
         .collect();
 
-    let rows = client
-        .query(
-            "SELECT m.id, m.name, m.description, m.icon, m.slug, m.nav_path,
-                    m.enabled, m.source_url, m.installed_at,
-                    a.status as agent_status, a.last_health_check, a.url as agent_url,
-                    a.manifest
-             FROM microservices m
-             LEFT JOIN agents a ON a.id = m.id
-             ORDER BY m.name",
-            &[],
-        )
-        .await?;
+    let rows = sqlx::query(
+        "SELECT m.id, m.name, m.description, m.icon, m.slug, m.nav_path,
+                m.enabled, m.source_url, m.installed_at,
+                a.status as agent_status, a.last_health_check, a.url as agent_url,
+                a.manifest
+         FROM microservices m
+         LEFT JOIN agents a ON a.id = m.id
+         ORDER BY m.name",
+    )
+    .fetch_all(&state.pool)
+    .await?;
 
     let services: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let manifest = r.get::<_, Option<serde_json::Value>>("manifest");
+            let manifest = r.get::<Option<serde_json::Value>, _>("manifest");
 
             // Extract required_secrets from manifest
             let required_secrets: Vec<String> = manifest
@@ -119,18 +115,18 @@ pub async fn list_services(
                 .collect();
 
             serde_json::json!({
-                "id": r.get::<_, String>("id"),
-                "name": r.get::<_, String>("name"),
-                "description": r.get::<_, String>("description"),
-                "icon": r.get::<_, String>("icon"),
-                "slug": r.get::<_, String>("slug"),
-                "nav_path": r.get::<_, String>("nav_path"),
-                "enabled": r.get::<_, bool>("enabled"),
-                "source_url": r.get::<_, Option<String>>("source_url"),
-                "installed_at": r.get::<_, chrono::DateTime<chrono::Utc>>("installed_at").to_rfc3339(),
-                "agent_status": r.get::<_, Option<String>>("agent_status"),
-                "agent_url": r.get::<_, Option<String>>("agent_url"),
-                "last_health_check": r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("last_health_check").map(|d| d.to_rfc3339()),
+                "id": r.get::<String, _>("id"),
+                "name": r.get::<String, _>("name"),
+                "description": r.get::<String, _>("description"),
+                "icon": r.get::<String, _>("icon"),
+                "slug": r.get::<String, _>("slug"),
+                "nav_path": r.get::<String, _>("nav_path"),
+                "enabled": r.get::<bool, _>("enabled"),
+                "source_url": r.get::<Option<String>, _>("source_url"),
+                "installed_at": r.get::<chrono::DateTime<chrono::Utc>, _>("installed_at").to_rfc3339(),
+                "agent_status": r.get::<Option<String>, _>("agent_status"),
+                "agent_url": r.get::<Option<String>, _>("agent_url"),
+                "last_health_check": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_health_check").map(|d| d.to_rfc3339()),
                 "manifest": manifest,
                 "required_secrets": required_secrets,
                 "missing_secrets": missing_secrets,
