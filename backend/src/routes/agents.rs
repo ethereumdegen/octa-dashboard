@@ -2,20 +2,19 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+use sqlx::Row;
 
 use crate::db::models::Agent;
 use crate::error::AppError;
 use crate::AppState;
 
 pub async fn list_agents(State(state): State<AppState>) -> Result<Json<Vec<Agent>>, AppError> {
-    let client = state.pool.get().await?;
-    let rows = client
-        .query(
-            "SELECT id, name, url, manifest, status, last_health_check, registered_at
-             FROM agents ORDER BY name",
-            &[],
-        )
-        .await?;
+    let rows = sqlx::query(
+        "SELECT id, name, url, manifest, status, last_health_check, registered_at
+         FROM agents ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await?;
 
     let agents: Vec<Agent> = rows
         .iter()
@@ -45,9 +44,9 @@ pub async fn agent_health(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let client = state.pool.get().await?;
-    let row = client
-        .query_opt("SELECT url FROM agents WHERE id = $1", &[&id])
+    let row = sqlx::query("SELECT url FROM agents WHERE id = $1")
+        .bind(id.as_str())
+        .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| AppError::NotFound("Agent not found".into()))?;
 

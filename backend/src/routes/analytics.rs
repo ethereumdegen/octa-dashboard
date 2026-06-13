@@ -3,6 +3,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use sqlx::Row;
 
 use crate::error::AppError;
 use crate::AppState;
@@ -10,31 +11,26 @@ use crate::AppState;
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let client = state.pool.get().await?;
+    let total_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
 
-    let total_users: i64 = client
-        .query_one("SELECT COUNT(*) as count FROM users", &[])
-        .await?
-        .get("count");
+    let total_agents: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents")
+        .fetch_one(&state.pool)
+        .await?;
 
-    let total_agents: i64 = client
-        .query_one("SELECT COUNT(*) as count FROM agents", &[])
-        .await?
-        .get("count");
+    // Documents now live in the RAG knowledgebase's `documents` table
+    // (the legacy `kb_documents` table was dropped in migration 019).
+    let total_docs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM documents")
+        .fetch_one(&state.pool)
+        .await?;
 
-    let total_docs: i64 = client
-        .query_one("SELECT COUNT(*) as count FROM kb_documents", &[])
-        .await?
-        .get("count");
-
-    let logins_today: i64 = client
-        .query_one(
-            "SELECT COUNT(*) as count FROM analytics_events
-             WHERE event_type = 'login' AND created_at >= CURRENT_DATE",
-            &[],
-        )
-        .await?
-        .get("count");
+    let logins_today: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM analytics_events
+         WHERE event_type = 'login' AND created_at >= CURRENT_DATE",
+    )
+    .fetch_one(&state.pool)
+    .await?;
 
     Ok(Json(serde_json::json!({
         "total_users": total_users,
@@ -55,18 +51,18 @@ pub async fn chart(
     Query(query): Query<ChartQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let days = query.days.unwrap_or(7);
-    let client = state.pool.get().await?;
 
-    let rows = client
-        .query(
-            "SELECT DATE(created_at) as date, COUNT(*) as count
-             FROM analytics_events
-             WHERE event_type = $1 AND created_at >= CURRENT_DATE - ($2 || ' days')::interval
-             GROUP BY DATE(created_at)
-             ORDER BY date",
-            &[&metric, &days.to_string()],
-        )
-        .await?;
+    let rows = sqlx::query(
+        "SELECT DATE(created_at) as date, COUNT(*) as count
+         FROM analytics_events
+         WHERE event_type = $1 AND created_at >= CURRENT_DATE - ($2 || ' days')::interval
+         GROUP BY DATE(created_at)
+         ORDER BY date",
+    )
+    .bind(metric.as_str())
+    .bind(days.to_string())
+    .fetch_all(&state.pool)
+    .await?;
 
     let data: Vec<serde_json::Value> = rows
         .iter()

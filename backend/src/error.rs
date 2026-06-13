@@ -37,14 +37,8 @@ impl IntoResponse for AppError {
     }
 }
 
-impl From<deadpool_postgres::PoolError> for AppError {
-    fn from(e: deadpool_postgres::PoolError) -> Self {
-        Self::Internal(format!("Pool error: {e}"))
-    }
-}
-
-impl From<tokio_postgres::Error> for AppError {
-    fn from(e: tokio_postgres::Error) -> Self {
+impl From<sqlx::Error> for AppError {
+    fn from(e: sqlx::Error) -> Self {
         Self::Internal(format!("Database error: {e}"))
     }
 }

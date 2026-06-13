@@ -1,5 +1,5 @@
 use agent_protocol::AgentManifest;
-use deadpool_postgres::Pool;
+use sqlx::PgPool;
 use tracing::{info, warn};
 
 fn capitalize_first(s: &str) -> String {
@@ -10,16 +10,8 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-pub async fn discover_agents(pool: &Pool, agent_urls: &[String]) {
+pub async fn discover_agents(pool: &PgPool, agent_urls: &[String]) {
     let secret = std::env::var("AGENT_SECRET").unwrap_or_default();
-
-    let client = match pool.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("Failed to get DB connection for agent discovery: {e}");
-            return;
-        }
-    };
 
     let http = reqwest::Client::new();
 
@@ -34,18 +26,21 @@ pub async fn discover_agents(pool: &Pool, agent_urls: &[String]) {
             Ok(resp) => match resp.json::<AgentManifest>().await {
                 Ok(manifest) => {
                     let manifest_json = serde_json::to_value(&manifest).unwrap_or_default();
-                    let _ = client
-                        .execute(
-                            "INSERT INTO agents (id, name, url, manifest, status, registered_at)
-                             VALUES ($1, $2, $3, $4, 'healthy', now())
-                             ON CONFLICT (id) DO UPDATE SET
-                                name = EXCLUDED.name,
-                                url = EXCLUDED.url,
-                                manifest = EXCLUDED.manifest,
-                                status = 'healthy'",
-                            &[&manifest.id, &manifest.name, url, &manifest_json],
-                        )
-                        .await;
+                    let _ = sqlx::query(
+                        "INSERT INTO agents (id, name, url, manifest, status, registered_at)
+                         VALUES ($1, $2, $3, $4, 'healthy', now())
+                         ON CONFLICT (id) DO UPDATE SET
+                            name = EXCLUDED.name,
+                            url = EXCLUDED.url,
+                            manifest = EXCLUDED.manifest,
+                            status = 'healthy'",
+                    )
+                    .bind(manifest.id.as_str())
+                    .bind(manifest.name.as_str())
+                    .bind(url.as_str())
+                    .bind(&manifest_json)
+                    .execute(pool)
+                    .await;
                     info!("Registered agent: {} ({})", manifest.name, manifest.id);
 
                     // Auto-create/update microservice record from manifest data.
@@ -59,20 +54,26 @@ pub async fn discover_agents(pool: &Pool, agent_urls: &[String]) {
                             .map(|i| capitalize_first(i))
                             .unwrap_or_else(|| "Box".to_string());
 
-                        let _ = client
-                            .execute(
-                                "INSERT INTO microservices (id, name, description, icon, slug, nav_path, enabled, source_url, installed_at)
-                                 VALUES ($1, $2, $3, $4, $5, $6, false, $7, now())
-                                 ON CONFLICT (id) DO UPDATE SET
-                                    name = EXCLUDED.name,
-                                    description = EXCLUDED.description,
-                                    icon = EXCLUDED.icon,
-                                    slug = EXCLUDED.slug,
-                                    nav_path = EXCLUDED.nav_path,
-                                    source_url = EXCLUDED.source_url",
-                                &[&manifest.id, &manifest.name, &manifest.description, &icon, &slug, &nav_path, url],
-                            )
-                            .await;
+                        let _ = sqlx::query(
+                            "INSERT INTO microservices (id, name, description, icon, slug, nav_path, enabled, source_url, installed_at)
+                             VALUES ($1, $2, $3, $4, $5, $6, false, $7, now())
+                             ON CONFLICT (id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                description = EXCLUDED.description,
+                                icon = EXCLUDED.icon,
+                                slug = EXCLUDED.slug,
+                                nav_path = EXCLUDED.nav_path,
+                                source_url = EXCLUDED.source_url",
+                        )
+                        .bind(manifest.id.as_str())
+                        .bind(manifest.name.as_str())
+                        .bind(manifest.description.as_str())
+                        .bind(icon.as_str())
+                        .bind(slug.as_str())
+                        .bind(nav_path.as_str())
+                        .bind(url.as_str())
+                        .execute(pool)
+                        .await;
                         info!("Upserted microservice from manifest: {} (slug={})", manifest.name, slug);
                     }
                 }

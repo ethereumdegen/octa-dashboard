@@ -5,6 +5,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use sqlx::Row;
+
 use crate::auth::session::Claims;
 use crate::AppState;
 
@@ -16,9 +18,9 @@ pub async fn proxy_agent(
     uri: Uri,
     req: Request,
 ) -> Result<Response, StatusCode> {
-    let client = state.pool.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let row = client
-        .query_opt("SELECT url FROM agents WHERE id = $1", &[&agent_id])
+    let row = sqlx::query("SELECT url FROM agents WHERE id = $1")
+        .bind(agent_id.as_str())
+        .fetch_optional(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;

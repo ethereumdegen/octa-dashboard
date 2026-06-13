@@ -5,6 +5,7 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::auth::github_oauth;
@@ -47,15 +48,14 @@ pub async fn github_callback(
         .map_err(|e| AppError::Internal(format!("GitHub email fetch failed: {e}")))?
         .ok_or_else(|| AppError::Unauthorized("No verified primary email on GitHub account".into()))?;
 
-    let client = state.pool.get().await?;
-
     // Check allowlist
-    let allowed = client
-        .query_opt("SELECT role FROM team_members WHERE email = $1", &[&email])
+    let allowed = sqlx::query("SELECT role FROM team_members WHERE email = $1")
+        .bind(email.as_str())
+        .fetch_optional(&state.pool)
         .await?;
 
     let role = match allowed {
-        Some(row) => row.get::<_, String>("role"),
+        Some(row) => row.get::<String, _>("role"),
         None => {
             return Err(AppError::Forbidden(
                 "Your email is not on the team allowlist".into(),
@@ -68,30 +68,35 @@ pub async fn github_callback(
     let github_id = gh_user.id;
 
     // Upsert user
-    let row = client
-        .query_one(
-            "INSERT INTO users (github_id, email, name, avatar_url, role, last_login_at)
-             VALUES ($1, $2, $3, $4, $5, now())
-             ON CONFLICT (github_id) DO UPDATE SET
-                email = EXCLUDED.email,
-                name = EXCLUDED.name,
-                avatar_url = EXCLUDED.avatar_url,
-                role = EXCLUDED.role,
-                last_login_at = now()
-             RETURNING id",
-            &[&github_id, &email, &name, &avatar, &role],
-        )
-        .await?;
+    let row = sqlx::query(
+        "INSERT INTO users (github_id, email, name, avatar_url, role, last_login_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (github_id) DO UPDATE SET
+            email = EXCLUDED.email,
+            name = EXCLUDED.name,
+            avatar_url = EXCLUDED.avatar_url,
+            role = EXCLUDED.role,
+            last_login_at = now()
+         RETURNING id",
+    )
+    .bind(github_id)
+    .bind(email.as_str())
+    .bind(name.as_str())
+    .bind(avatar.as_str())
+    .bind(role.as_str())
+    .fetch_one(&state.pool)
+    .await?;
 
     let user_id: Uuid = row.get("id");
 
     // Record analytics event
-    let _ = client
-        .execute(
-            "INSERT INTO analytics_events (event_type, metadata, user_id) VALUES ('login', $1, $2)",
-            &[&serde_json::json!({"method": "github"}), &user_id],
-        )
-        .await;
+    let _ = sqlx::query(
+        "INSERT INTO analytics_events (event_type, metadata, user_id) VALUES ('login', $1, $2)",
+    )
+    .bind(serde_json::json!({"method": "github"}))
+    .bind(user_id)
+    .execute(&state.pool)
+    .await;
 
     let token = create_token(user_id, &email, &role, &state.config.jwt_secret);
 

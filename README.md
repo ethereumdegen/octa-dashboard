@@ -1,6 +1,6 @@
 # Octa Dashboard
 
-An open-source admin dashboard with a pluggable microservice architecture. Ships with a **knowledgebase agent** as a sample microservice — add your own by following the agent protocol.
+An open-source admin dashboard with a pluggable microservice architecture. Ships with a **knowledgebase agent** (a document-RAG app — upload documents and chat with an agent over them) as a sample microservice — add your own by following the agent protocol.
 
 ```
                     Internet
@@ -75,7 +75,7 @@ The central hub. Handles auth, team management, API keys, analytics, migrations,
 
 Each microservice is an independent Rust binary with its own optional frontend. The dashboard discovers them via `/.well-known/agent.json` and health-checks them every 30 seconds.
 
-**Included:** `knowledgebase-agent` — an Obsidian-style markdown knowledgebase with folder hierarchy, search, and import/export.
+**Included:** `knowledgebase-agent` — a document-RAG knowledgebase. Organize documents into knowledgebases and folders, upload files to S3, index them, and chat with a retrieval-augmented agent over their contents. Upload/indexing/chat require an OpenAI API key + an S3-compatible store; without them the agent still runs (those features are simply disabled).
 
 ### Agent Protocol (`crates/agent-protocol/`)
 
@@ -168,11 +168,14 @@ RUST_LOG             = info
 ```
 DATABASE_URL   = ${{Postgres.DATABASE_URL}}
 AGENT_SECRET   = <same as dashboard>
+DASHBOARD_URL  = http://${{dashboard.RAILWAY_PRIVATE_DOMAIN}}:8080
 PORT           = 4001
 RUST_LOG       = info
 ```
 
 > `KB_STATIC_DIR` is baked into the Dockerfile as `/app/static`.
+>
+> To enable document upload + RAG chat, add an `OPENAI_API_KEY` and S3 credentials (`S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, and `S3_ENDPOINT` for non-AWS stores) — either as env vars here or as Platform Secrets in the dashboard (the agent fetches missing ones via `DASHBOARD_URL`).
 
 #### Adding more microservices
 
@@ -263,7 +266,17 @@ All services share a single PostgreSQL database. Migrations run automatically on
 | `AGENT_SECRET` | No | `""` | Shared secret |
 | `PORT` | No | `4001` | Listen port |
 | `KB_STATIC_DIR` | No | `static` | Frontend assets path |
+| `DASHBOARD_URL` | No | `http://localhost:8080` | Dashboard URL (used to fetch unset secrets from Platform Secrets) |
+| `OPENAI_API_KEY` | No | `""` | Enables indexing + the RAG chat agent |
+| `OPENAI_MODEL` | No | `gpt-5.4` | Chat model |
+| `S3_REGION` | No | `nyc3` | S3 region |
+| `S3_ACCESS_KEY` | No | `""` | Enables document upload/indexing |
+| `S3_SECRET_KEY` | No | `""` | Enables document upload/indexing |
+| `S3_BUCKET` | No | `knowledgebase-docs` | Bucket for uploaded documents |
+| `S3_ENDPOINT` | No | `""` | Custom endpoint for S3-compatible stores |
 | `RUST_LOG` | No | `info` | Log level |
+
+> The OpenAI + S3 settings can be provided as env vars, or stored once as **Platform Secrets** in the dashboard (Settings) — the agent fetches any it's missing from `DASHBOARD_URL` using `AGENT_SECRET`. Without them the agent runs but upload/indexing/chat are disabled.
 
 ---
 

@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/hooks/useDocuments.ts"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/api/kb.ts","./src/components/ChatTab.tsx","./src/components/DocumentDetail.tsx","./src/components/DocumentsTab.tsx","./src/components/KbDetailView.tsx","./src/components/KbListView.tsx","./src/components/SettingsTab.tsx"],"version":"5.9.3"}
