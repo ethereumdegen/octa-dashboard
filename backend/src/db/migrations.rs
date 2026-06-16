@@ -1,26 +1,11 @@
+use include_dir::{include_dir, Dir};
 use sqlx::PgPool;
 use tracing::info;
 
-const MIGRATIONS: &[(&str, &str)] = &[
-    ("001_users", include_str!("migrations/001_users.sql")),
-    ("002_team_members", include_str!("migrations/002_team_members.sql")),
-    ("003_agents", include_str!("migrations/003_agents.sql")),
-    ("004_kb_documents", include_str!("migrations/004_kb_documents.sql")),
-    ("005_analytics_events", include_str!("migrations/005_analytics_events.sql")),
-    ("006_api_keys", include_str!("migrations/006_api_keys.sql")),
-    ("007_kb_is_folder", include_str!("migrations/007_kb_is_folder.sql")),
-    ("008_microservices", include_str!("migrations/008_microservices.sql")),
-    // Migrations 009-010 removed (security-agent and pool-security-agent)
-    ("011_platform_secrets", include_str!("migrations/011_platform_secrets.sql")),
-    ("012_projects", include_str!("migrations/012_projects.sql")),
-    ("013_api_key_suffix", include_str!("migrations/013_api_key_suffix.sql")),
-    ("014_agent_sources", include_str!("migrations/014_agent_sources.sql")),
-    ("015_microservices_data_driven", include_str!("migrations/015_microservices_data_driven.sql")),
-    ("016_platform_secrets_description", include_str!("migrations/016_platform_secrets_description.sql")),
-    ("017_kb_rag", include_str!("migrations/017_kb_rag.sql")),
-    ("018_kb_description", include_str!("migrations/018_kb_description.sql")),
-    ("019_drop_legacy_kb_documents", include_str!("migrations/019_drop_legacy_kb_documents.sql")),
-];
+/// All `*.sql` files under this directory are embedded at compile time and applied
+/// in filename order. Drop a new `0NN_name.sql` file in and it runs automatically —
+/// no registration needed. The numeric prefix (001_, 002_, …) determines order.
+static MIGRATIONS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/db/migrations");
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
     sqlx::query(
@@ -32,7 +17,24 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Err
     .execute(pool)
     .await?;
 
-    for &(name, sql) in MIGRATIONS {
+    // Collect embedded .sql files and apply in filename order (zero-padded prefixes sort correctly).
+    let mut files: Vec<_> = MIGRATIONS_DIR
+        .files()
+        .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("sql"))
+        .collect();
+    files.sort_by_key(|f| f.path().to_path_buf());
+
+    for file in files {
+        // Migration name is the filename without extension, e.g. "020_watcher".
+        let name = file
+            .path()
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("migration filename must be valid UTF-8");
+        let sql = file
+            .contents_utf8()
+            .expect("migration SQL must be valid UTF-8");
+
         let applied = sqlx::query("SELECT 1 FROM _migrations WHERE name = $1")
             .bind(name)
             .fetch_optional(pool)

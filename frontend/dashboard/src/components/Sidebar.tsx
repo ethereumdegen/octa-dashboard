@@ -13,9 +13,33 @@ const coreNavItems = [
 // Keep a reference to the full icon set so the bundler cannot tree-shake it.
 const iconLookup: Record<string, unknown> = allIcons;
 
+// Render a single letter as a Lucide-compatible icon (inherits currentColor),
+// so a manifest icon like "W" shows the letter instead of the generic Box.
+function makeLetterIcon(letter: string): LucideIcon {
+  const LetterIcon = ({ size = 24 }: { size?: number | string }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <text
+        x="12"
+        y="12"
+        dominantBaseline="central"
+        textAnchor="middle"
+        fill="currentColor"
+        fontSize="14"
+        fontWeight="700"
+        fontFamily="system-ui, sans-serif"
+      >
+        {letter}
+      </text>
+    </svg>
+  );
+  return LetterIcon as unknown as LucideIcon;
+}
+
 function resolveIcon(name: string): LucideIcon {
   const icon = iconLookup[name];
   if (typeof icon === "function" && "displayName" in icon) return icon as LucideIcon;
+  // A single letter (e.g. "W") renders as a letter glyph.
+  if (/^[A-Za-z]$/.test(name)) return makeLetterIcon(name.toUpperCase());
   return Box;
 }
 

@@ -4,6 +4,7 @@ members = [
     "crates/agent-protocol",
     "backend",
     "microservices/knowledgebase-agent",
+    "microservices/watcher-agent",
 ]
 
 [workspace.dependencies]
