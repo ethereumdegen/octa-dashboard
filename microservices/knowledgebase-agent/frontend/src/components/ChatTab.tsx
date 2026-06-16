@@ -51,6 +51,13 @@ export default function ChatTab({ kbId }: { kbId: string }) {
   // spinner from the instant Enter is pressed — including the window where a new
   // session is still being created and there's no `sessionId`/`detail` yet.
   const [pending, setPending] = useState<string | null>(null);
+  // Explicit "a reply is outstanding" flag. This — not the cached message shape —
+  // is what keeps `refetchInterval` polling. Deriving polling solely from
+  // isWaiting(detail) is fragile: a slow in-flight getSession can land with the
+  // pre-send state (empty/no trailing user message) and flip isWaiting false,
+  // stopping polling forever so the reply only shows on a manual refresh. That
+  // race is latency-sensitive — invisible locally, reproducible on Railway.
+  const [awaitingReply, setAwaitingReply] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const { data: sessions } = useQuery({
@@ -62,8 +69,20 @@ export default function ChatTab({ kbId }: { kbId: string }) {
     queryKey: ["session", kbId, sessionId],
     queryFn: () => kbApi.getSession(kbId, sessionId!),
     enabled: !!sessionId,
-    refetchInterval: (q) => (isWaiting(q.state.data as SessionDetail | undefined) ? 1500 : false),
+    // Poll while we're awaiting a reply, or whenever the loaded session ends on
+    // an unanswered user message (e.g. navigating back to an in-flight chat).
+    refetchInterval: (q) =>
+      awaitingReply || isWaiting(q.state.data as SessionDetail | undefined) ? 1500 : false,
   });
+
+  // Clear the awaiting flag once the assistant's reply (or an error/timeout
+  // message, which is also assistant-role) has actually landed from the server.
+  useEffect(() => {
+    const msgs = detail?.messages;
+    if (awaitingReply && msgs?.length && msgs[msgs.length - 1].role === "assistant") {
+      setAwaitingReply(false);
+    }
+  }, [detail?.messages, awaitingReply]);
 
   const newSession = useMutation({
     mutationFn: () => kbApi.createSession(kbId),
@@ -105,6 +124,7 @@ export default function ChatTab({ kbId }: { kbId: string }) {
     onError: (_err, { sid }, ctx) => {
       if (ctx?.prev) qc.setQueryData(["session", kbId, sid], ctx.prev);
       setPending(null);
+      setAwaitingReply(false);
     },
     onSettled: (_data, _err, { sid }) => {
       qc.invalidateQueries({ queryKey: ["session", kbId, sid] });
@@ -129,9 +149,11 @@ export default function ChatTab({ kbId }: { kbId: string }) {
     if (!content) return;
     setInput("");
     // Show the user's bubble + spinner immediately, before we (possibly) await
-    // session creation. send.onMutate clears this once the optimistic message
-    // takes over.
+    // session creation. send.onMutate clears `pending` once the optimistic
+    // message takes over; `awaitingReply` keeps polling alive until the reply
+    // lands, regardless of any stale getSession fetch that races in between.
     setPending(content);
+    setAwaitingReply(true);
     let sid = sessionId;
     if (!sid) {
       const s = await kbApi.createSession(kbId, content.slice(0, 50));
@@ -145,7 +167,7 @@ export default function ChatTab({ kbId }: { kbId: string }) {
     send.mutate({ sid, content });
   };
 
-  const waiting = pending !== null || isWaiting(detail) || send.isPending;
+  const waiting = awaitingReply || pending !== null || isWaiting(detail) || send.isPending;
 
   return (
     <div className="flex h-full gap-4">
